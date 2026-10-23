@@ -2,11 +2,17 @@ import sqlite3
 from fastapi import FastAPI, HTTPException, status
 from pydantic import BaseModel, EmailStr
 
-app = FastAPI(title="API de poker - US01", version="1.0.0")
+app = FastAPI(title="API de poker", version="1.0.0")
+
+def get_db_connection():
+    conn = sqlite3.connect("poker.db")
+    conn.row_factory = sqlite3.Row
+    return conn
 
 def init_db():
-    conn = sqlite3.connect("poker.db")
+    conn = get_db_connection()
     cursor = conn.cursor()
+    
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS jogadores (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -15,10 +21,30 @@ def init_db():
             senha TEXT NOT NULL
         )
     """)
+    
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS partidas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id_criador INTEGER NOT NULL,
+            max_jogadores INTEGER NOT NULL,
+            status TEXT DEFAULT 'aberta',
+            FOREIGN KEY (id_criador) REFERENCES jogadores (id)
+        )
+    """)
+    
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS participantes (
+            id_partida INTEGER NOT NULL,
+            id_jogador INTEGER NOT NULL,
+            PRIMARY KEY (id_partida, id_jogador),
+            FOREIGN KEY (id_partida) REFERENCES partidas (id),
+            FOREIGN KEY (id_jogador) REFERENCES jogadores (id)
+        )
+    """)
+    
     conn.commit()
     conn.close()
 
-# Executa a criação da tabela
 init_db()
 
 class JogadorCreate(BaseModel):
@@ -26,18 +52,19 @@ class JogadorCreate(BaseModel):
     email: EmailStr
     senha: str
 
+class PartidaCreate(BaseModel):
+    id_criador: int
+    max_jogadores: int = 4
+
 @app.post("/poker/cadastro", status_code=status.HTTP_201_CREATED)
 def cadastrar_jogador(jogador: JogadorCreate):
-    conn = sqlite3.connect("poker.db")
+    conn = get_db_connection()
     cursor = conn.cursor()
     
     cursor.execute("SELECT * FROM jogadores WHERE email = ?", (jogador.email,))
     if cursor.fetchone():
         conn.close()
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, 
-            detail="Email já cadastrado"
-        )
+        raise HTTPException(status_code=400, detail="Email já cadastrado")
     
     try:
         cursor.execute(
@@ -46,13 +73,53 @@ def cadastrar_jogador(jogador: JogadorCreate):
         )
         conn.commit()
         jogador_id = cursor.lastrowid
-    except Exception as e:
+    except Exception:
         conn.close()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
-            detail="Erro ao cadastrar jogador"
-        )
+        raise HTTPException(status_code=500, detail="Erro ao cadastrar jogador")
     finally:
         conn.close()
         
     return {"id": jogador_id}
+
+@app.post("/poker/partidas", status_code=status.HTTP_201_CREATED)
+def criar_partida(partida: PartidaCreate):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT id FROM jogadores WHERE id = ?", (partida.id_criador,))
+    if not cursor.fetchone():
+        conn.close()
+        raise HTTPException(status_code=404, detail="Jogador criador não encontrado")
+
+    cursor.execute(
+        "INSERT INTO partidas (id_criador, max_jogadores) VALUES (?, ?)",
+        (partida.id_criador, partida.max_jogadores)
+    )
+    id_partida = cursor.lastrowid
+    
+    cursor.execute(
+        "INSERT INTO participantes (id_partida, id_jogador) VALUES (?, ?)",
+        (id_partida, partida.id_criador)
+    )
+    
+    conn.commit()
+    conn.close()
+    return {"id": id_partida, "mensagem": "Partida criada com sucesso"}
+
+@app.get("/poker/partidasAbertas")
+def consultar_partidas_abertas():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    query = """
+        SELECT p.id, p.max_jogadores, COUNT(pa.id_jogador) as jogadores_presentes
+        FROM partidas p
+        LEFT JOIN participantes pa ON p.id = pa.id_partida
+        WHERE p.status = 'aberta'
+        GROUP BY p.id
+    """
+    cursor.execute(query)
+    partidas = cursor.fetchall()
+    conn.close()
+    
+    return [dict(p) for p in partidas]
