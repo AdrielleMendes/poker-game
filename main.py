@@ -123,3 +123,35 @@ def consultar_partidas_abertas():
     conn.close()
     
     return [dict(p) for p in partidas]
+
+@app.post("/poker/{idPartida}/entrar")
+def entrar_na_partida(idPartida: int, idJogador: int):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT * FROM partidas WHERE id = ?", (idPartida,))
+    partida = cursor.fetchone()
+    if not partida:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Partida não encontrada")
+        
+    if partida["status"] != "aberta":
+        conn.close()
+        raise HTTPException(status_code=400, detail="A partida já foi iniciada ou finalizada")
+        
+    cursor.execute("SELECT * FROM participantes WHERE id_partida = ? AND id_jogador = ?", (idPartida, idJogador))
+    if cursor.fetchone():
+        conn.close()
+        raise HTTPException(status_code=400, detail="Jogador já está nesta partida")
+        
+    cursor.execute("SELECT COUNT(*) as total FROM participantes WHERE id_partida = ?", (idPartida,))
+    total_jogadores = cursor.fetchone()["total"]
+    if total_jogadores >= partida["max_jogadores"]:
+        conn.close()
+        raise HTTPException(status_code=400, detail="A mesa está cheia")
+        
+    cursor.execute("INSERT INTO participantes (id_partida, id_jogador) VALUES (?, ?)", (idPartida, idJogador))
+    conn.commit()
+    conn.close()
+    
+    return {"mensagem": "Jogador entrou na partida com sucesso"}
