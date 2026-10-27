@@ -1,4 +1,5 @@
-import sqlite3
+import sqlite3 
+from baralho import embaralhar_e_distribuir
 from fastapi import FastAPI, HTTPException, status
 from pydantic import BaseModel, EmailStr
 
