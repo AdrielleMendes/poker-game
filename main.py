@@ -1,4 +1,5 @@
-import sqlite3
+import sqlite3 
+from baralho import embaralhar_e_distribuir
 from fastapi import FastAPI, HTTPException, status
 from pydantic import BaseModel, EmailStr
 
@@ -186,3 +187,4 @@ def iniciar_partida(idPartida: int, idJogador: int):
     conn.close()
     
     return {"sucesso": True, "mensagem": "Partida iniciada com sucesso", "idPartida": idPartida}
+
