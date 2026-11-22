@@ -2,7 +2,8 @@ import sqlite3
 from baralho import embaralhar_e_distribuir
 from fastapi import FastAPI, HTTPException, status
 from pydantic import BaseModel, EmailStr
-
+from padroes.facade import PokerFacade
+poker_facade = PokerFacade()
 app = FastAPI(title="API de poker", version="1.0.0")
 
 def get_db_connection():
@@ -161,30 +162,40 @@ def entrar_na_partida(idPartida: int, idJogador: int):
 def iniciar_partida(idPartida: int, idJogador: int):
     conn = get_db_connection()
     cursor = conn.cursor()
-    
+
     cursor.execute("SELECT * FROM partidas WHERE id = ?", (idPartida,))
-    partida = cursor.fetchone()
-    if not partida:
-        conn.close()
-        raise HTTPException(status_code=404, detail="Partida não encontrada")
-        
-    if partida["id_criador"] != idJogador:
-        conn.close()
-        raise HTTPException(status_code=403, detail="Apenas o criador da mesa pode iniciá-la")
-        
-    if partida["status"] != "aberta":
-        conn.close()
-        raise HTTPException(status_code=400, detail="A partida já foi iniciada ou encerrada")
+    partida_row = cursor.fetchone()
+    partida = dict(partida_row) if partida_row else None
 
-    cursor.execute("SELECT COUNT(*) as total FROM participantes WHERE id_partida = ?", (idPartida,))
-    total_jogadores = cursor.fetchone()["total"]
-    if total_jogadores < 2:
-        conn.close()
-        raise HTTPException(status_code=400, detail="A mesa precisa de pelo menos 2 jogadores para iniciar")
+    cursor.execute("SELECT id_jogador FROM participantes WHERE id_partida = ?", (idPartida,))
+    participantes = cursor.fetchall()
+    jogadores_ids = [row["id_jogador"] for row in participantes]
 
-    cursor.execute("UPDATE partidas SET status = 'iniciada' WHERE id = ?", (idPartida,))
-    conn.commit()
+    def salvar_status_iniciada(partida_id: int):
+        cursor.execute("UPDATE partidas SET status = 'iniciada' WHERE id = ?", (partida_id,))
+        conn.commit()
+
+    try:
+        resultado = poker_facade.iniciar_partida(
+            partida=partida,
+            jogadores_ids=jogadores_ids,
+            solicitante_id=idJogador,
+            on_iniciar=salvar_status_iniciada,
+        )
+    except LookupError as exc:
+        conn.close()
+        raise HTTPException(status_code=404, detail=str(exc))
+    except PermissionError as exc:
+        conn.close()
+        raise HTTPException(status_code=403, detail=str(exc))
+    except RuntimeError as exc:
+        conn.close()
+        raise HTTPException(status_code=400, detail=str(exc))
+
     conn.close()
-    
-    return {"sucesso": True, "mensagem": "Partida iniciada com sucesso", "idPartida": idPartida}
-
+    return {
+        "sucesso": resultado["sucesso"],
+        "idPartida": resultado["idPartida"],
+        "mensagem": "Partida iniciada com sucesso",
+        "cartas": resultado["cartas"],
+    }
